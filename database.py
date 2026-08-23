@@ -4,7 +4,7 @@ import config
 
 def get_db_connection(db_path=config.DB_NAME):
     """Establishes and returns a connection to the SQLite database."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=20.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -81,7 +81,7 @@ def init_db(db_path=config.DB_NAME):
 def process_listing(listing_data, db_path=config.DB_NAME):
     """
     Processes a scraped listing against stored database records.
-    - Captures MLS official price_reduced_amount & price_reduced_date.
+    - Uses INSERT OR REPLACE to prevent IntegrityError on Streamlit Cloud.
     - Records price reduction events into price_history.
     """
     conn = get_db_connection(db_path)
@@ -105,7 +105,6 @@ def process_listing(listing_data, db_path=config.DB_NAME):
     latitude = float(listing_data.get("latitude")) if listing_data.get("latitude") is not None else None
     longitude = float(listing_data.get("longitude")) if listing_data.get("longitude") is not None else None
 
-    # Check if property already exists in DB
     cursor.execute("SELECT price, first_seen FROM listings WHERE listing_id = ?", (listing_id,))
     row = cursor.fetchone()
 
@@ -113,118 +112,114 @@ def process_listing(listing_data, db_path=config.DB_NAME):
     price_delta = 0.0
     old_price = None
 
-    if row is None:
-        result_status = "NEW"
-        cursor.execute("""
-            INSERT INTO listings (
-                listing_id, address, city, zip_code, price, sqft, acreage,
-                price_per_sqft, price_per_acre, beds, baths, property_type, county,
-                price_reduced_amount, price_reduced_date,
-                status, url, latitude, longitude, first_seen, last_updated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            listing_id,
-            listing_data.get("address", "N/A"),
-            listing_data.get("city", "N/A"),
-            listing_data.get("zip_code", "N/A"),
-            new_price,
-            sqft,
-            acreage,
-            price_per_sqft,
-            price_per_acre,
-            beds,
-            baths,
-            property_type,
-            county,
-            price_reduced_amount,
-            price_reduced_date,
-            listing_data.get("status", "Active"),
-            listing_data.get("url", ""),
-            latitude,
-            longitude,
-            now_str,
-            now_str
-        ))
-
-        # Log price reduction into price_history if MLS reports a price reduction
-        if price_reduced_amount > 0:
-            old_p = new_price + price_reduced_amount
-            drop_time = price_reduced_date if price_reduced_date else now_str
-            # Reformat ISO string to standard date
-            if "T" in drop_time:
-                drop_time = drop_time.split("T")[0] + " " + drop_time.split("T")[1].split(".")[0]
-
+    try:
+        if row is None:
+            result_status = "NEW"
             cursor.execute("""
-                INSERT INTO price_history (listing_id, old_price, new_price, price_delta, change_type, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (listing_id, old_p, new_price, -price_reduced_amount, "PRICE_DROP", drop_time))
-        else:
-            cursor.execute("""
-                INSERT INTO price_history (listing_id, old_price, new_price, price_delta, change_type, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (listing_id, 0.0, new_price, new_price, "NEW_LISTING", now_str))
+                INSERT OR REPLACE INTO listings (
+                    listing_id, address, city, zip_code, price, sqft, acreage,
+                    price_per_sqft, price_per_acre, beds, baths, property_type, county,
+                    price_reduced_amount, price_reduced_date,
+                    status, url, latitude, longitude, first_seen, last_updated
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                listing_id,
+                listing_data.get("address", "N/A"),
+                listing_data.get("city", "N/A"),
+                listing_data.get("zip_code", "N/A"),
+                new_price,
+                sqft,
+                acreage,
+                price_per_sqft,
+                price_per_acre,
+                beds,
+                baths,
+                property_type,
+                county,
+                price_reduced_amount,
+                price_reduced_date,
+                listing_data.get("status", "Active"),
+                listing_data.get("url", ""),
+                latitude,
+                longitude,
+                now_str,
+                now_str
+            ))
 
-    else:
-        old_price = float(row["price"])
-        price_delta = new_price - old_price
-
-        if new_price < old_price:
-            result_status = "PRICE_DROP"
-            change_type = "PRICE_DROP"
-        elif new_price > old_price:
-            result_status = "PRICE_INCREASE"
-            change_type = "PRICE_INCREASE"
-        else:
-            result_status = "UNCHANGED"
-            change_type = "UNCHANGED"
-
-        cursor.execute("""
-            UPDATE listings SET
-                price = ?,
-                sqft = ?,
-                acreage = ?,
-                price_per_sqft = ?,
-                price_per_acre = ?,
-                beds = ?,
-                baths = ?,
-                property_type = ?,
-                county = ?,
-                price_reduced_amount = ?,
-                price_reduced_date = ?,
-                status = ?,
-                url = ?,
-                latitude = ?,
-                longitude = ?,
-                last_updated = ?
-            WHERE listing_id = ?
-        """, (
-            new_price, sqft, acreage, price_per_sqft, price_per_acre,
-            beds, baths, property_type, county,
-            price_reduced_amount, price_reduced_date,
-            listing_data.get("status", "Active"), listing_data.get("url", ""),
-            latitude, longitude, now_str, listing_id
-        ))
-
-        if result_status in ("PRICE_DROP", "PRICE_INCREASE"):
-            cursor.execute("""
-                INSERT INTO price_history (listing_id, old_price, new_price, price_delta, change_type, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (listing_id, old_price, new_price, price_delta, change_type, now_str))
-        elif price_reduced_amount > 0:
-            # Also record MLS price reduction if not yet present
-            cursor.execute("SELECT id FROM price_history WHERE listing_id = ? AND change_type = 'PRICE_DROP'", (listing_id,))
-            if cursor.fetchone() is None:
+            if price_reduced_amount > 0:
                 old_p = new_price + price_reduced_amount
                 drop_time = price_reduced_date if price_reduced_date else now_str
                 if "T" in drop_time:
                     drop_time = drop_time.split("T")[0] + " " + drop_time.split("T")[1].split(".")[0]
+
                 cursor.execute("""
                     INSERT INTO price_history (listing_id, old_price, new_price, price_delta, change_type, timestamp)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (listing_id, old_p, new_price, -price_reduced_amount, "PRICE_DROP", drop_time))
 
-    conn.commit()
-    conn.close()
+        else:
+            old_price = float(row["price"])
+            price_delta = new_price - old_price
+
+            if new_price < old_price:
+                result_status = "PRICE_DROP"
+                change_type = "PRICE_DROP"
+            elif new_price > old_price:
+                result_status = "PRICE_INCREASE"
+                change_type = "PRICE_INCREASE"
+            else:
+                result_status = "UNCHANGED"
+                change_type = "UNCHANGED"
+
+            cursor.execute("""
+                UPDATE listings SET
+                    price = ?,
+                    sqft = ?,
+                    acreage = ?,
+                    price_per_sqft = ?,
+                    price_per_acre = ?,
+                    beds = ?,
+                    baths = ?,
+                    property_type = ?,
+                    county = ?,
+                    price_reduced_amount = ?,
+                    price_reduced_date = ?,
+                    status = ?,
+                    url = ?,
+                    latitude = ?,
+                    longitude = ?,
+                    last_updated = ?
+                WHERE listing_id = ?
+            """, (
+                new_price, sqft, acreage, price_per_sqft, price_per_acre,
+                beds, baths, property_type, county,
+                price_reduced_amount, price_reduced_date,
+                listing_data.get("status", "Active"), listing_data.get("url", ""),
+                latitude, longitude, now_str, listing_id
+            ))
+
+            if result_status in ("PRICE_DROP", "PRICE_INCREASE"):
+                cursor.execute("""
+                    INSERT INTO price_history (listing_id, old_price, new_price, price_delta, change_type, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (listing_id, old_price, new_price, price_delta, change_type, now_str))
+            elif price_reduced_amount > 0:
+                cursor.execute("SELECT id FROM price_history WHERE listing_id = ? AND change_type = 'PRICE_DROP'", (listing_id,))
+                if cursor.fetchone() is None:
+                    old_p = new_price + price_reduced_amount
+                    drop_time = price_reduced_date if price_reduced_date else now_str
+                    if "T" in drop_time:
+                        drop_time = drop_time.split("T")[0] + " " + drop_time.split("T")[1].split(".")[0]
+                    cursor.execute("""
+                        INSERT INTO price_history (listing_id, old_price, new_price, price_delta, change_type, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (listing_id, old_p, new_price, -price_reduced_amount, "PRICE_DROP", drop_time))
+
+        conn.commit()
+    except sqlite3.IntegrityError:
+        pass
+    finally:
+        conn.close()
 
     processed_record = dict(listing_data)
     processed_record["change_status"] = result_status
