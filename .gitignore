@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment Variables & Keys (DO NOT COMMIT)
+.env
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Database files (Optional: ignored so Streamlit Cloud starts fresh or uses mock/DB init)
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+dashboard.html
