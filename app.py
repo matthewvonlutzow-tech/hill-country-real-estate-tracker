@@ -392,101 +392,115 @@ with tab3:
         map_df = map_df.dropna(subset=["latitude", "longitude"])
 
         if not map_df.empty:
-            map_df["display_size"] = map_df["acreage"].apply(lambda x: min(30, max(10, x * 4)))
-            
-            try:
-                fig_val_map = go.Figure()
+            map_df["display_size"] = map_df["acreage"].apply(lambda x: min(28, max(12, x * 4)))
 
-                legend_mapping = {
-                    "💎 Exceptional Value": ("Exceptional Value (15%+ Below Median $/Acre)", "#10b981"),
-                    "⚖️ Fair Market": ("Fair Market Value (+/-15% of Median $/Acre)", "#2563eb"),
-                    "📈 Premium Pricing": ("Premium Pricing (15%+ Above Median $/Acre)", "#8b5cf6")
-                }
+            # Build Map Data Rows (Listings + Landmarks)
+            map_records = []
 
-                for badge_key, (legend_label, color) in legend_mapping.items():
-                    tier_df = map_df[map_df["value_badge"] == badge_key]
-                    if not tier_df.empty:
-                        hover_texts = []
-                        for _, row in tier_df.iterrows():
-                            hover_texts.append(
-                                f"<b>{row['address']}</b>, {row['city']} TX {row['zip_code']}<br>"
-                                f"Price: <b>${row['price']:,.0f}</b><br>"
-                                f"Acreage: <b>{row['acreage']:.2f} Acres</b> (${row['price_per_acre']:,.2f}/Acre)<br>"
-                                f"Living SqFt: <b>{row['sqft']:,.0f} SqFt</b> (${row['price_per_sqft']:,.2f}/SqFt)<br>"
-                                f"Tier: <b>{row['value_badge']}</b>"
-                            )
+            legend_names = {
+                "💎 Exceptional Value": "Exceptional Value (15%+ Below Median $/Acre)",
+                "⚖️ Fair Market": "Fair Market Value (+/-15% of Median $/Acre)",
+                "📈 Premium Pricing": "Premium Pricing (15%+ Above Median $/Acre)"
+            }
 
-                        fig_val_map.add_trace(go.Scattermapbox(
-                            lat=tier_df["latitude"],
-                            lon=tier_df["longitude"],
-                            mode="markers",
-                            marker=dict(
-                                size=tier_df["display_size"],
-                                color=color,
-                                opacity=0.85
-                            ),
-                            text=hover_texts,
-                            hoverinfo="text",
-                            name=legend_label
-                        ))
-
-                # Add School Landmarks Overlay
-                if show_schools:
-                    schools_df = pd.DataFrame([l for l in LANDMARKS if l["type"] == "School"])
-                    school_texts = [f"<b>{row['name']}</b><br>{row['address']}" for _, row in schools_df.iterrows()]
-                    fig_val_map.add_trace(go.Scattermapbox(
-                        lat=schools_df["latitude"],
-                        lon=schools_df["longitude"],
-                        mode="markers+text",
-                        marker=dict(size=18, color="#fbbf24"),
-                        text=schools_df["name"],
-                        textposition="top center",
-                        hovertext=school_texts,
-                        hoverinfo="text",
-                        name="Dripping Springs ISD Schools"
-                    ))
-
-                # Add Hospital Landmarks Overlay
-                if show_hospitals:
-                    hospitals_df = pd.DataFrame([l for l in LANDMARKS if l["type"] == "Hospital"])
-                    hospital_texts = [f"<b>{row['name']}</b><br>{row['address']}" for _, row in hospitals_df.iterrows()]
-                    fig_val_map.add_trace(go.Scattermapbox(
-                        lat=hospitals_df["latitude"],
-                        lon=hospitals_df["longitude"],
-                        mode="markers+text",
-                        marker=dict(size=18, color="#ef4444"),
-                        text=hospitals_df["name"],
-                        textposition="top center",
-                        hovertext=hospital_texts,
-                        hoverinfo="text",
-                        name="Hospitals & Emergency Care Centers"
-                    ))
-
-                fig_val_map.update_layout(
-                    mapbox=dict(
-                        style="open-street-map",
-                        center=dict(lat=30.185, lon=-98.055),
-                        zoom=10.2
-                    ),
-                    margin=dict(l=0, r=0, t=40, b=0),
-                    height=650,
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        xanchor="right",
-                        x=1,
-                        bgcolor="rgba(255, 255, 255, 0.95)",
-                        bordercolor="#cbd5e1",
-                        borderwidth=1,
-                        font=dict(size=12)
-                    )
+            for _, row in map_df.iterrows():
+                badge = row.get("value_badge", "⚖️ Fair Market")
+                category_name = legend_names.get(badge, "Fair Market Value (+/-15% of Median $/Acre)")
+                
+                hover_txt = (
+                    f"<b>{row['address']}</b>, {row['city']} TX {row['zip_code']}<br>"
+                    f"Price: <b>${row['price']:,.0f}</b><br>"
+                    f"Acreage: <b>{row['acreage']:.2f} Acres</b> (${row['price_per_acre']:,.2f}/Acre)<br>"
+                    f"Living SqFt: <b>{row['sqft']:,.0f} SqFt</b> (${row['price_per_sqft']:,.2f}/SqFt)<br>"
+                    f"Tier: <b>{category_name}</b>"
                 )
 
-                st.plotly_chart(fig_val_map, use_container_width=True)
+                map_records.append({
+                    "lat": row["latitude"],
+                    "lon": row["longitude"],
+                    "category": category_name,
+                    "size": row["display_size"],
+                    "hover": hover_txt
+                })
 
-            except Exception:
-                st.map(map_df[["latitude", "longitude"]].rename(columns={"latitude": "lat", "longitude": "lon"}), zoom=10, size=25)
+            if show_schools:
+                schools = [l for l in LANDMARKS if l["type"] == "School"]
+                for sch in schools:
+                    hover_txt = (
+                        f"🏫 <b>{sch['name']}</b><br>"
+                        f"Category: <b>{sch['category']}</b><br>"
+                        f"Address: <b>{sch['address']}</b>"
+                    )
+                    map_records.append({
+                        "lat": sch["latitude"],
+                        "lon": sch["longitude"],
+                        "category": "🏫 Dripping Springs ISD Schools",
+                        "size": 22,
+                        "hover": hover_txt
+                    })
+
+            if show_hospitals:
+                hospitals = [l for l in LANDMARKS if l["type"] == "Hospital"]
+                for hosp in hospitals:
+                    hover_txt = (
+                        f"🏥 <b>{hosp['name']}</b><br>"
+                        f"Category: <b>{hosp['category']}</b><br>"
+                        f"Address: <b>{hosp['address']}</b>"
+                    )
+                    map_records.append({
+                        "lat": hosp["latitude"],
+                        "lon": hosp["longitude"],
+                        "category": "🏥 Hospitals & ER Facilities",
+                        "size": 22,
+                        "hover": hover_txt
+                    })
+
+            full_map_df = pd.DataFrame(map_records)
+
+            color_discrete_map = {
+                "Exceptional Value (15%+ Below Median $/Acre)": "#10b981",  # Emerald Green
+                "Fair Market Value (+/-15% of Median $/Acre)": "#2563eb",       # Sapphire Blue
+                "Premium Pricing (15%+ Above Median $/Acre)": "#8b5cf6",        # Royal Purple
+                "🏫 Dripping Springs ISD Schools": "#f59e0b",                     # Amber Gold
+                "🏥 Hospitals & ER Facilities": "#dc2626"                        # Medical Crimson Red
+            }
+
+            px_map_fn = getattr(px, "scatter_map", getattr(px, "scatter_mapbox", None))
+            style_param = "map_style" if hasattr(px, "scatter_map") else "mapbox_style"
+
+            map_kwargs = {
+                "lat": "lat",
+                "lon": "lon",
+                "color": "category",
+                "size": "size",
+                "hover_name": "hover",
+                "color_discrete_map": color_discrete_map,
+                "zoom": 10.2,
+                "center": {"lat": 30.185, "lon": -98.055},
+                style_param: "open-street-map",
+                "height": 650
+            }
+
+            fig_val_map = px_map_fn(full_map_df, **map_kwargs)
+            fig_val_map.update_traces(hoverinfo="text", hovertemplate="%{hover_name}<extra></extra>")
+
+            fig_val_map.update_layout(
+                margin=dict(l=0, r=0, t=30, b=0),
+                legend=dict(
+                    title=dict(text="<b>Map Legend & Categories</b>"),
+                    orientation="v",
+                    yanchor="top",
+                    y=0.98,
+                    xanchor="right",
+                    x=0.99,
+                    bgcolor="rgba(255, 255, 255, 0.92)",
+                    bordercolor="#cbd5e1",
+                    borderwidth=1,
+                    font=dict(size=11)
+                )
+            )
+
+            st.plotly_chart(fig_val_map, use_container_width=True)
 
             # Detailed Text Legend Explanation Below Map
             st.markdown("""
@@ -497,8 +511,8 @@ with tab3:
             | 🟢 **Emerald Green** | **Exceptional Value** | Properties priced **15%+ below** the local ZIP code median price-per-acre. |
             | 🔵 **Sapphire Blue** | **Fair Market Value** | Properties priced within **$\pm15\%$** of the local ZIP code median price-per-acre. |
             | 🟣 **Royal Purple** | **Premium Pricing** | Properties priced **15%+ above** the local ZIP code median price-per-acre. |
-            | 🟡 **Gold Badges** | **Dripping Springs ISD Schools** | Elementary, Middle, and High School campuses. |
-            | 🔴 **Red Badges** | **Hospitals & ER Facilities** | Emergency Centers and Regional Medical Facilities. |
+            | 🟡 **Gold Badges (🏫)** | **Dripping Springs ISD Schools** | Elementary, Middle, and High School campuses. |
+            | 🔴 **Red Badges (🏥)** | **Hospitals & ER Facilities** | Emergency Centers and Regional Medical Facilities. |
             | ⭕ **Circle Size** | **Property Lot Size** | Circle size scales proportionally with lot size acreage (larger circle = larger acreage). |
             """)
 
